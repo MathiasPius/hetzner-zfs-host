@@ -76,8 +76,8 @@ This step needs to be expanded, since a lot of the configuration for the server 
 * Setting up sanoid for periodic snapshots of all zpools
 
 # See also
-https://gist.github.com/kongkrit/2d31d58a7656d3b5d3e3ce1a8dda9f56
-https://wiki.alpinelinux.org/wiki/Root_on_ZFS_with_native_encryption
-https://github.com/alpinelinux/alpine-make-vm-image/blob/master/alpine-make-vm-image
-https://ryan.lovelett.me/posts/ubuntu-20-04-root-on-zfs/
-https://docs.oracle.com/cd/E53394_01/html/E54801/gazhv.html#scrolltoc
+* https://gist.github.com/kongkrit/2d31d58a7656d3b5d3e3ce1a8dda9f56
+* https://wiki.alpinelinux.org/wiki/Root_on_ZFS_with_native_encryption
+* https://github.com/alpinelinux/alpine-make-vm-image/blob/master/alpine-make-vm-image
+* https://ryan.lovelett.me/posts/ubuntu-20-04-root-on-zfs/
+* https://docs.oracle.com/cd/E53394_01/html/E54801/gazhv.html#scrolltoc
