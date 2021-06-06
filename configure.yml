@@ -16,25 +16,19 @@
         - curl
         - cni-plugins@community
         - containerd@community
-        - containerd-openrc@community
-
-  - name: create zfs filesystem for containerd snapshotting
-    zfs:
-      name: rpool/containerd
-      state: present
-      extra_zfs_properties:
-        mountpoint: /var/lib/containerd/io.containerd.snapshotter.v1.zfs
-
-  - name: mount zfs volumes
-    shell: zfs mount -a
 
   # Of note in this config:
   #   Setting the cri snapshotter to zfs.
-  #   Overriding cni bin_dir to /usr/libexec/cni/ as that's where the cni-plugins package for Alpine installs them
+  #   Overriding cni bin_dir to /usr/libexec/cni as that's where the cni-plugins package for Alpine installs them
   - name: configure containerd
     copy:
       dest: /etc/containerd/config.toml
       content: |
+        disabled_plugins = []
+        imports = ["/etc/containerd/config.toml"]
+        oom_score = 0
+        plugin_dir = ""
+        required_plugins = []
         root = "/var/lib/containerd"
         state = "/run/containerd"
         version = 2
@@ -96,7 +90,7 @@
             unset_seccomp_profile = ""
 
             [plugins."io.containerd.grpc.v1.cri".cni]
-              bin_dir = "/usr/libexec/cni/"
+              bin_dir = "/usr/libexec/cni"
               conf_dir = "/etc/cni/net.d"
               conf_template = ""
               max_conf_num = 1
@@ -246,9 +240,3 @@
           address = ""
           gid = 0
           uid = 0
-
-  - name: enable containerd
-    service:
-      name: containerd
-      state: started
-      enabled: true
