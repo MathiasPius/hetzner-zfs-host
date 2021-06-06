@@ -4,9 +4,9 @@ These playbooks are used for bringing a Hetzner dedicated server (with 2 or more
 ## Provisioning
 
 It creates 3 zpools:
-* **bpool** - contains the boot config
-* **rpool** - contains the root filesystem
-* **dpool** - data pool, used for anything non-systems-related
+* **bpool** - contains the boot config (**512m**)
+* **rpool** - contains the root filesystem (**8g**)
+* **dpool** - data pool, used for anything non-systems-related (**rest of the disk**)
 
 These pools are created in a N-way mirror, where N is the number of disk devices on the server.
 All the disks are assumed to be the same size.
@@ -14,11 +14,32 @@ The total useable capacity is therefore the size of any one disk, but in return 
 
 Apart from the root disks, the playbook also writes the grub config to each device, so if /dev/sda gets corrupted, it is possible to boot from one of the other devices.
 
-### Disk layout
+### Partition layout
+```
+$ lsblk -o NAME,SIZE,TYPE
+NAME    SIZE TYPE
+sda     1.8T disk
+├─sda1    1M part
+├─sda2  512M part
+├─sda3    8G part
+└─sda4  1.8T part
+sdb     1.8T disk
+├─sdb1    1M part
+├─sdb2  512M part
+├─sdb3    8G part
+└─sdb4  1.8T part
+sdc     1.8T disk
+├─sdc1    1M part
+├─sdc2  512M part
+├─sdc3    8G part
+└─sdc4  1.8T part
+```
+
+### Dataset layout
 For an example of the disk layout after successfully provisioning the server, see the following:
 
 ```
-metal-8xeo:~# zfs list -o name | tail -n+2 | tree --fromfile
+$ zfs list -o name | tail -n+2 | tree --fromfile
 .
 ├── bpool
 │   └── BOOT
