@@ -35,6 +35,16 @@ sdc     1.8T disk
 └─sdc4  1.8T part
 ```
 
+Partition layout informationf or a single disk:
+
+```
+Device        Start        End    Sectors  Size Type
+/dev/sda1      2048       4095       2048    1M BIOS boot
+/dev/sda2      4096    1052671    1048576  512M Solaris root
+/dev/sda3   1052672   17829887   16777216    8G Solaris root
+/dev/sda4  17829888 3907029134 3889199247  1.8T Linux filesystem
+```
+
 ### Dataset layout
 For an example of the disk layout after successfully provisioning the server, see the following:
 
