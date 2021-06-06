@@ -1,0 +1,226 @@
+---
+- name: deploy apk-tools to rescue system
+  copy:
+    src: "{{ apk_tools_binary }}"
+    dest: apk
+    mode: ug=rwx,o=r
+  tags: deploy-apk
+
+- name: initialize alpine-base in directory
+  shell: ./apk -X {{ alpine_mirror }}/{{ alpine_branch }}/main -u --allow-untrusted --root /{{ chroot_directory }} --initdb add alpine-base
+
+- name: prepare chroot
+  shell: |
+    mount --bind /dev  {{ chroot_directory }}/dev
+    mount --bind /proc {{ chroot_directory }}/proc
+    mount --bind /sys  {{ chroot_directory }}/sys
+
+- name: mount zfs filesystems
+  shell: |
+    zfs mount rpool/ROOT/alpine
+    
+    zfs set dnodesize=legacy bpool/BOOT/default
+    mkdir -p {{ chroot_directory }}/boot
+    zpool set bootfs=bpool/BOOT/default bpool
+    mount -t zfs bpool/BOOT/default {{ chroot_directory }}/boot
+
+- name: configuring networking for both IPv4 DHCP and IPv6 RA
+  copy:
+    dest: "{{ chroot_directory }}/etc/network/interfaces"
+    content: |
+      auto lo
+      iface lo inet loopback
+
+      auto eth0
+      iface eth0 inet dhcp
+      iface eth0 inet6 manual
+        pre-up echo 1 > /proc/sys/net/ipv6/conf/eth0/accept_ra
+
+      # The post-up command is to prevent the server from assigning
+      # the internal gateway as the default one, which basically just
+      # black-holes any incoming traffic on the public address since
+      # it can't find a return path.
+      auto eth0.4000
+      iface eth0.4000 inet static
+        up ip route add {{ internal_network }} via {{ internal_gateway }} dev $IFACE
+        post-up ip route del default dev $IFACE
+        address {{ internal_address }}
+        gateway {{ internal_gateway }}
+        netmask 255.255.255.0
+
+- name: define alpine repositories
+  copy:
+    dest: "{{ chroot_directory }}/etc/apk/repositories"
+    content: "{{ alpine_repositories | join('\n') }}"
+
+- name: copy resolv conf from the rescue system to the server
+  copy:
+    src: /etc/resolv.conf
+    dest: "{{ chroot_directory }}/etc/resolv.conf"
+    remote_src: true
+
+- name: install requisite packages
+  shell: |
+    chroot {{ chroot_directory }} apk add udev util-linux zfs-lts openssh vim zfs grub grub-bios bash sudo python3 lvm2 smartmontools
+
+- name: configure services
+  shell: |
+    chroot {{ chroot_directory }} rc-update add devfs sysinit
+    chroot {{ chroot_directory }} rc-update add dmesg sysinit
+    chroot {{ chroot_directory }} rc-update add mdev sysinit
+    chroot {{ chroot_directory }} rc-update add hwdrivers sysinit
+
+    chroot {{ chroot_directory }} rc-update add hwclock boot
+    chroot {{ chroot_directory }} rc-update add modules boot
+    chroot {{ chroot_directory }} rc-update add sysctl boot
+    chroot {{ chroot_directory }} rc-update add hostname boot
+    chroot {{ chroot_directory }} rc-update add bootmisc boot
+    chroot {{ chroot_directory }} rc-update add syslog boot
+    chroot {{ chroot_directory }} rc-update add networking boot
+
+    chroot {{ chroot_directory }} rc-update add mount-ro shutdown
+    chroot {{ chroot_directory }} rc-update add killprocs shutdown
+    chroot {{ chroot_directory }} rc-update add savecache shutdown
+
+    chroot {{ chroot_directory }} rc-update add zfs-import sysinit
+    chroot {{ chroot_directory }} rc-update add zfs-mount sysinit
+
+    chroot {{ chroot_directory }} rc-update add sshd default
+    chroot {{ chroot_directory }} rc-update add udev default
+    chroot {{ chroot_directory }} rc-update add udev-trigger default
+    chroot {{ chroot_directory }} rc-update add udev-settle default
+
+- name: allow passwordless sudo for admin
+  copy:
+    dest: "{{ chroot_directory }}/etc/sudoers.d/wheel"
+    owner: root
+    group: root
+    mode: ug=r,o=
+    content: "%wheel ALL=(ALL) NOPASSWD: ALL"
+
+- name: configure admin user
+  shell: |
+    chroot {{ chroot_directory }} adduser -D -u 1000 -s /bin/bash {{ admin_username }} wheel
+    chroot {{ chroot_directory }} addgroup {{ admin_username }} wheel
+    echo {{ admin_username }}:{{ admin_password }} | chroot {{ chroot_directory }} chpasswd
+    echo root:{{ admin_password }} | chroot {{ chroot_directory }} chpasswd
+
+- name: configure mkinitfs
+  copy:
+    dest: "{{ chroot_directory }}/etc/mkinitfs/mkinitfs.conf"
+    content: features="ata base cdrom ext4 keymap kms mmc raid scsi usb virtio zfs"
+
+- name: run mkinitfs
+  shell: "chroot {{ chroot_directory }} mkinitfs $(chroot {{ chroot_directory }} ls /lib/modules/)"
+
+- name: configure udev rule for mapping partlabels straight to /dev
+  copy:
+    dest: "{{ chroot_directory }}/etc/udev/rules.d/70-zfs-grub-fix.rules"
+    content: KERNEL=="sd*[0-9]", IMPORT{parent}=="ID_*", ENV{ID_FS_TYPE}=="zfs_member", SYMLINK+="$env{PARTNAME}"
+
+- name: configure grub
+  copy:
+    dest: "{{ chroot_directory }}/etc/default/grub"
+    content: |
+      GRUB_DISTRIBUTOR="Alpine"
+      GRUB_TIMEOUT=2
+      GRUB_DISABLE_SUBMENU=y
+      GRUB_DISABLE_RECOVERY=true
+      GRUB_CMDLINE_LINUX="rootfstype=zfs root=ZFS=rpool/ROOT/alpine" boot=zfs
+      GRUB_CMDLINE_LINUX_DEFAULT=""
+
+- name: unfuck the grub config generator when dealing with multiple grub devices
+  lineinfile:
+    path: "{{ chroot_directory }}/etc/grub.d/10_linux"
+    regexp: "linux.*\\$\\{args\\}$"
+    line: "\tlinux	${rel_dirname}/${basename} ${args} rw"
+
+- name: install grub to all devices
+  shell: "chroot {{ chroot_directory }} /bin/bash -l -c 'ZPOOL_VDEV_NAME_PATH=1 grub-install --force --target=i386-pc --recheck --boot-directory=/boot /dev/disk/by-id/wwn-{{ item.wwn }}'"
+  loop: "{{ grub_devices.values() | list }}"
+
+- name: write out grub config
+  shell: "chroot {{ chroot_directory }} /bin/bash -c 'ZPOOL_VDEV_NAME_PATH=1 grub-mkconfig -o /boot/grub/grub.cfg'"
+
+- name: configure kernel modules
+  copy:
+    dest: "{{ chroot_directory }}/etc/modules"
+    content: |
+      af_packet
+      ipv6
+      zfs
+
+- name: configure fstab
+  copy:
+    dest: "{{ chroot_directory }}/etc/fstab"
+    content: bpool/BOOT/default /boot zfs rw,nodev,noatime,xattr,posixacl 0 0
+
+- name: configure ssh
+  vars:
+    ssh_kex_algorithms: "curve25519-sha256@libssh.org,diffie-hellman-group-exchange-sha256"
+    ssh_ciphers: "chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes128-gcm@openssh.com,aes256-ctr,aes192-ctr,aes128-ctr"
+    ssh_macs: "hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com,umac-128-etm@openssh.com,hmac-sha2-512,hmac-sha2-256,umac-128@openssh.com"
+    ssh_host_key_algorithms:
+      - algo: ed25519
+        bits: 256
+        name: "ssh-ed25519,ssh-ed25519-cert-v01@openssh.com"
+  copy:
+    owner: root
+    group: root
+    dest: "{{ chroot_directory }}/etc/ssh/sshd_config"
+    content: |
+      # cipherlist.dev
+      Protocol 2
+
+      HostKey /etc/ssh/ssh_host_ed25519_key
+
+      KexAlgorithms {{ ssh_kex_algorithms }}
+      Ciphers {{ ssh_ciphers }}
+      MACs {{ ssh_macs }}
+
+      # Standard Config
+      PrintMotd no
+      AuthorizedKeysFile      .ssh/authorized_keys
+      AllowTcpForwarding no
+      GatewayPorts no
+      X11Forwarding no
+      Subsystem       sftp    internal-sftp
+
+      # Hardening
+      MaxAuthTries 5
+      PermitRootLogin no
+      PermitEmptyPasswords no
+      PubkeyAuthentication yes
+      PasswordAuthentication no
+      RekeyLimit 256M
+
+      HostKeyAlgorithms {{ ssh_host_key_algorithms | map(attribute='name') | join(',') }}
+
+- name: "create {{ admin_username }} ssh key directory"
+  file:
+    path: "{{ chroot_directory }}/home/{{ admin_username }}/.ssh"
+    mode: u=rwX,go=
+    owner: "1000"
+    group: "1000"
+    state: directory
+
+- name: copy ssh key
+  copy:
+    src: /root/.ssh/authorized_keys
+    dest: "{{ chroot_directory }}/home/{{ admin_username }}/.ssh/authorized_keys"
+    mode: u=rw,go=
+    owner: "1000"
+    group: "1000"
+    remote_src: true
+
+- name: write out hostname file
+  copy:
+    dest: "{{ chroot_directory }}/etc/hostname"
+    content: "{{ inventory_hostname }}"
+
+- name: overwrite hosts file
+  copy:
+    dest: "{{ chroot_directory }}/etc/hosts"
+    content: |
+      127.0.0.1	{{ inventory_hostname }} localhost localhost.localdomain
+      ::1		    {{ inventory_hostname }} localhost localhost.localdomain

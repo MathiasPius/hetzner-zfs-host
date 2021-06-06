@@ -1,0 +1,99 @@
+---
+- hosts: localhost
+  gather_facts: false
+  vars:
+    apk_arch: x86_64
+    apk_tools_version: "2.10.4"
+  tasks:
+  - name: create cache directory if it doesn't exist
+    file:
+      path: "./.cache"
+      state: directory
+
+  - name: cache apk tools locally
+    get_url:
+      url: "https://github.com/alpinelinux/apk-tools/releases/download/v{{ apk_tools_version }}/apk-tools-{{ apk_tools_version }}-{{ apk_arch }}-linux.tar.gz"
+      dest: ./.cache/
+    when: "{{ lookup('file', './.cache/apk-tools-{{ apk_tools_version }}-{{ apk_arch }}-linux.tar.gz', errors = 'ignore') == None }}"
+
+  - name: extract apk tools archive
+    shell:
+      chdir: "./.cache"
+      cmd: "tar -xvf ./apk-tools-{{ apk_tools_version }}-{{ apk_arch }}-linux.tar.gz"
+      warn: false
+
+- hosts: all
+  gather_facts: false
+  tasks:
+  - name: gather facts explicitly
+    setup:
+
+  - name: check if we're in the rescue environment
+    fail:
+      msg: |
+        Using this role outside of the Hetzner Debian rescue environment is not supported
+        ansible_lsb.codename is '{{ ansible_lsb.codename | default('undefined') }}' expected 'buster'
+        ansible_lsb.release is '{{ ansible_lsb.release | default('undefined') }}' expected '10'
+        ansible_nodename is '{{ ansible_nodename | default('undefined') }}' expected 'rescue'
+    when: |
+      ansible_nodename != 'rescue'
+      or ansible_lsb.release != '10'
+      or ansible_lsb.codename != 'buster'
+
+  - name: prepare rescue environment
+    include_tasks:
+      file: tasks/prepare_rescue.yml
+
+  - name: compile some lists based on input drives
+    vars:
+      drives: "{{ ansible_devices | dict2items | json_query('[?value.vendor!=null]') | items2dict }}"
+    set_fact:
+      zpool_devices: "{{ drives }}"
+      grub_partitions: "{% for device in drives.values() %}/dev/disk/by-partlabel/{{ device.wwn }}-grub {% endfor %}"
+      root_partitions: "{% for device in drives.values() %}/dev/disk/by-partlabel/{{ device.wwn }}-root {% endfor %}"
+      data_partitions: "{% for device in drives.values() %}/dev/disk/by-partlabel/{{ device.wwn }}-data {% endfor %}"
+
+  - name: prepare drives for new zpools
+    vars:
+      grub_partitions: "{{ grub_partitions }}"
+      boot_size: 512m
+      root_size: 8g
+      device:
+        prefix: "{{ item.wwn }}"
+        path: "/dev/disk/by-id/wwn-{{ item.wwn }}"
+    include_tasks:
+      file: tasks/prepare_drive.yml
+    loop: "{{ zpool_devices.values() | list }}"
+
+  - name: create zpools & zfs datasets
+    include_tasks:
+      file: tasks/create_zfs.yml
+
+  - name: initialize alpine
+    vars:
+      grub_devices: "{{ zpool_devices }}"
+      admin_username: rancher
+      apk_tools_version: "2.10.4"
+      apk_tools_binary: "./.cache/apk-tools-{{ apk_tools_version }}/apk"
+      alpine_arch: "{{ ansible_architecture }}"
+      alpine_mirror: http://dl-cdn.alpinelinux.org/alpine
+      alpine_branch: latest-stable
+      alpine_version: v3.13
+      alpine_repositories:
+        - "http://ftp.acc.umu.se/mirror/alpinelinux.org/{{ alpine_version }}/main"
+        - "@community http://dl-cdn.alpinelinux.org/alpine/edge/community/"
+        - "@testing http://dl-cdn.alpinelinux.org/alpine/edge/testing/"
+      chroot_directory: "/mnt"
+    include_tasks:
+      file: tasks/initialize_alpine.yml
+
+  - name: unmount zfs and export root pool
+    shell: |
+      umount -R /mnt
+      zpool export -a
+      sleep 2 && reboot now
+    ignore_errors: true
+    failed_when: false
+    async: 1
+    poll: 0
+    tags: fix-grub

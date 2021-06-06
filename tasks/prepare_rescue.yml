@@ -1,0 +1,26 @@
+---
+- name: force apt cache update
+  apt:
+    update_cache: true
+
+- name: install packages used by rescue system
+  apt:
+    name:
+      - udev
+      - zfs-dkms
+      - zfsutils-linux
+      - zfs-initramfs
+      - debootstrap
+    install_recommends: false
+    default_release: buster-backports
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+
+- name: enable zfs kernel module
+  modprobe:
+    name: zfs
+
+- name: configure udev rule for mapping partlabels straight to /dev
+  copy:
+    dest: /etc/udev/rules.d/70-zfs-grub-fix.rules
+    content: KERNEL=="sd*[0-9]", IMPORT{parent}=="ID_*", ENV{ID_FS_TYPE}=="zfs_member", SYMLINK+="$env{PARTNAME}"

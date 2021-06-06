@@ -1,0 +1,101 @@
+---
+- name: gather facts about existing boot pool
+  zpool_facts: 
+    pool: bpool
+  register: bpool_facts
+  failed_when: false
+
+- name: destroy existing bpool
+  shell: zpool destroy -f bpool
+  when: bpool_facts.ansible_facts is defined
+
+- name: create boot pool
+  shell: |
+    zpool create -f -o ashift=12 -d \
+    -o feature@async_destroy=enabled \
+    -o feature@bookmarks=enabled \
+    -o feature@embedded_data=enabled \
+    -o feature@empty_bpobj=enabled \
+    -o feature@enabled_txg=enabled \
+    -o feature@extensible_dataset=enabled \
+    -o feature@filesystem_limits=enabled \
+    -o feature@hole_birth=enabled \
+    -o feature@large_blocks=enabled \
+    -o feature@lz4_compress=enabled \
+    -o feature@spacemap_histogram=enabled \
+    -o feature@userobj_accounting=enabled \
+    -o feature@zpool_checkpoint=enabled \
+    -o feature@spacemap_v2=enabled \
+    -o feature@project_quota=enabled \
+    -o feature@resilver_defer=enabled \
+    -o feature@allocation_classes=enabled \
+    -O acltype=posixacl -O canmount=off -O compression=lz4 -O devices=off \
+    -O normalization=formD -O relatime=on -O xattr=sa \
+    -O mountpoint=none -R /mnt bpool mirror {{ grub_partitions }}
+
+- name: gather facts about existing root pool
+  zpool_facts: 
+    pool: rpool
+  register: rpool_facts
+  failed_when: false
+
+- name: destroy existing rpool
+  shell: zpool destroy -f rpool
+  when: rpool_facts.ansible_facts is defined
+
+# Explicitly disable log_spacemap since it's not supported, apparently.
+- name: create root pool
+  shell: |
+    zpool create -f -o ashift=12 \
+      -o feature@log_spacemap=disabled \
+      -O acltype=posixacl -O canmount=off -O compression=lz4 \
+      -O dnodesize=auto -O normalization=formD -O relatime=on -O xattr=sa \
+      -O mountpoint=none -R /mnt rpool mirror {{ root_partitions }}
+
+- name: create data pool
+  shell: |
+    zpool create -f -o ashift=12 \
+      -o feature@log_spacemap=disabled \
+      -O acltype=posixacl -O canmount=off -O compression=lz4 \
+      -O dnodesize=auto -O normalization=formD -O relatime=on -O xattr=sa \
+      -O mountpoint=none -R /mnt dpool mirror {{ data_partitions }}
+
+- name: create rpool/ROOT dataset
+  zfs:
+    name: rpool/ROOT
+    state: present
+    extra_zfs_properties:
+      mountpoint: "none"
+      canmount: "off"
+
+- name: create rpool/ROOT/alpine dataset
+  zfs:
+    name: rpool/ROOT/alpine
+    state: present
+    extra_zfs_properties:
+      mountpoint: "/"
+      atime: "off"
+
+- name: create bpool/BOOT dataset
+  zfs:
+    name: bpool/BOOT
+    state: present
+    extra_zfs_properties:
+      mountpoint: "none"
+      canmount: "off"
+
+- name: create bpool/BOOT/default dataset
+  zfs:
+    name: bpool/BOOT/default
+    state: present
+    extra_zfs_properties:
+      mountpoint: "legacy"
+      atime: "off"
+
+- name: create dpool/DATA dataset
+  zfs:
+    name: dpool/DATA
+    state: present
+    extra_zfs_properties:
+      mountpoint: "none"
+      canmount: "off"

@@ -1,0 +1,19 @@
+# These tasks reformat an entire drive to be used as ZFS drives
+---
+- name: "zap all partitions on {{ device.path }} and create GPT table"
+  shell: "sgdisk --zap-all {{ device.path }}"
+
+- name: "create boot partition {{ device.path }}-boot"
+  shell: "sgdisk -g -n1:0:+1m -t1:ef02 -c1:{{ device.prefix }}-boot {{ device.path }}"
+
+- name: "create boot partition {{ device.path }}-grub"
+  shell: "sgdisk -g -n2:0:+{{ boot_size }} -t2:bf00 -c2:{{ device.prefix }}-grub {{ device.path }}"
+
+- name: "create root partition {{ device.path }}-root"
+  shell: "sgdisk -g -n3:0:+{{ root_size }} -t3:bf00 -c3:{{ device.prefix }}-root {{ device.path }}"
+
+- name: "create data partition {{ device.path }}-data"
+  shell: "sgdisk -g -n4:0:+ -c4:{{ device.prefix }}-data {{ device.path }}"
+
+- name: rebuild udev devices
+  shell: udevadm trigger && udevadm settle

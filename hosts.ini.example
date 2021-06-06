@@ -1,0 +1,8 @@
+[metal]
+metal-8xeo  ansible_user=root   ansible_host=188.40.126.139 internal_address=10.41.1.10 ansible_ssh_private_key_file=~/.ssh/id_mpd2020 ansible_python_interpreter=/usr/bin/python3
+
+[metal:vars]
+internal_gateway=10.41.1.1
+internal_network=10.41.0.0/16
+internal_netmask=255.255.255.0
+admin_password=5YM7wS3O
